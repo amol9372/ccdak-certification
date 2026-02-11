@@ -1,0 +1,202 @@
+kafka:
+
+  properties-link: https://docs.google.com/spreadsheets/d/1UkJt-Y0p0bpse6pUCwaLdVvGzni8hYWaFl6LJYlvqAw/edit?gid=1821800459#gid=1821800459
+
+
+  SCHEMA REGISTRY:
+    Subject:
+      Namespace or name of the schema
+
+    auto.register.schemas: > Important
+      In the context of Confluent Schema Registry, "auto-registering schemas" typically refers to the ability 
+      for producers to automatically register new schemas with the Schema Registry when they produce messages 
+      with schemas that haven't been registered before. Should be false in production.
+      
+    3 Ways to create / evolve schemas: 
+      - Schema registry API (non-confluent)
+        #> POST /subjects/<subject-name>/versions HTTP/1.1
+      - Confluent CLI
+        #> confluent schema-registry schema create --subject <subject-name> --schema-file <path-to-schema-file>  
+      - Maven, Gradle plugins
+
+    3 Types of Schemas:
+      - Avro (default type)
+        > Need to provide default values
+
+      - Protobuf (protocol buffers)
+        > No Need to provide default values
+
+      - Json (not good due to serialization / deserialization)
+
+  COMMANDS: 
+    - Create Topic:
+        kafka-topics --create --create --topic orders --partitions 3 --replication-factor 3 --bootstrap-server pkc-12576z.us-west2.gcp.confluent.cloud:9092 --command-config client.properties
+    
+    - Consumer With group:
+        kafka-console-consumer \
+        --consumer.config consumer.properties
+        --topic orders \
+        --group group-1 \
+        --bootstrap-server pkc-12576z.us-west2.gcp.confluent.cloud:9092 \
+
+    - Producer:
+        kafka-console-producer --bootstrap-server pkc-12576z.us-west2.gcp.confluent.cloud:9092 --topic orders
+
+    - Broker:
+        kafka-configs --bootstrap-server localhost:9092 --entity-type brokers --entity-name 1 --describe    
+    
+    - Confluent-Cli:
+       sample commands:
+        - #> confluent login
+        - #> confluent environment use env-<id>
+        - #> confluent kafka cluster use lkc-<cluster-id>    
+        - #> confluent kafka topic create learn_schema_registry --partitions 2 --config retention.ms=604800000
+   
+  K-Streams:
+    There are 4 types of streams:
+    - Tumblig time
+    - Hopping time
+    - Sliding window >Only used in joins
+    - Session Windowsn   
+     
+
+  TOPIC:
+    # > Use retention.ms = 0 to delete all messages from a topic
+
+    properties:
+      - partitions: No of partitions
+      - relication.factor: no of replicas for a partition
+      - min.insync.replicas (min ISR): 
+      - ISR is always synced with the leader:
+        - A high min.insync.replicas value prioritizes data durability at the expense of availability.
+        - A low min.insync.replicas value prioritizes availability at the expense of data durability.
+        - If a leader goes out, one of the ISR is selected as leader, Otherwise producer will be blocked.
+      - unclean.leader.election.enable: 
+      
+         To avoid producer wait & allowing cluster to choose Non-ISR as leader. If all ISR replicas are unavailable, 
+         setting this to true allows Kafka to elect a leader from the out-of-sync replicas, 
+         which can bring the partition back online more quickly.
+
+      - acks:
+        - > acks=0
+            Requires NO acknowledgement
+        - > acks=1
+            Requires acknowledgement from leader
+        - > acks=all or -1
+            Requires acknowledgement from all ISRs
+      - max.poll.records: 
+            Kafka consumer configuration that controls the maximum number of records returned in a single call to poll()
+            default to "500". If value is greater than it means processing time per message is relatively low.
+            Lower value indicates processing time is high.
+                      
+  
+  CONSUMER:
+    properties:
+      enable.auto.commit:
+        - default: true & 5 Seconds
+        - true: Consumer will automatically commit offsets after processing messages
+        - false: Consumer must manually commit offsets after processing messages
+
+
+  PRODUCER:
+    properties:
+  
+  CONFIGURATION:
+    Broker wide default: All Topic configs have a broker wide default. 
+
+    Config types:
+     - Static: 
+        These are configuration settings that are defined in Kafka's configuration files 
+        (typically server.properties for brokers and consumer.properties or producer.properties for clients) 
+        and take effect only when the Kafka broker or client is started or restarted.
+        eg log.dirs, num.partitions, bootstrap.servers
+     - Dynamic: 
+        These are configurations that can be modified at runtime without requiring a 
+        restart of the Kafka broker or client.  eg Topic configurations (e.g., retention.ms, cleanup.policy)
+        > Dynamic configs can be altered using Kafka's admin tools or APIs, such as kafka-configs or the Kafka AdminClient.   
+    
+
+
+  BROKER:
+    Broker config:
+      - Server.properties (static)
+      - Command line
+      - AdminClient API
+    Config Types:
+      - Read-only: Require Broker restart to be updated
+      - Per-broker: Can be dynamically updated for each broker
+      - Cluster-wide: Can be updated per-broker but cluster wide default, can be dynamically updated
+      
+    
+  STREAMS:
+      #> Co-Partitioned, They have the same number of partitions.
+      #> The records with the same key are stored in the same partition across all involved topics.     
+      
+      #> Stateful tranformations need co-partitioned topics.
+      #> To avoid co-partitioning, you can use GlobalKTable, which contains partitions for all keys.
+
+      Stateless:
+        - branch: split a stream into multiple streams based on a predicate
+        - map
+        - flatmap: takes a record and produces 0 or more records
+        - filter
+        - peek: Similar to forEach, but it does not stop processing the stream
+        - foreach: terminal operation
+        - groupby: Grouping records by key. it is not stateful
+        - merge: Merge two streams into one stream
+      Stateful:
+  
+        - count: Count the number of records in a stream
+        - reduce: Aggregate records in a stream
+        - aggregations         
+        - joins
+        - Windowing 
+
+      Windows: 
+        - Time-based: 
+          - Tumbling: Fixed-size, non-overlapping time intervals
+          - Hopping: Overlapping time intervals
+          - Sliding: Overlapping time intervals with a fixed size  
+        - Session-based: Variable-size time intervals based on activity
+        - Custom: User-defined time intervals
+
+  REST_PROXY:
+    info: 
+      REST Proxy is a component of Confluent Platform that allows you to interact with Kafka using HTTP REST APIs.
+      It provides a way to produce and consume messages, manage topics, and perform other Kafka operations over HTTP.
+      REST Proxy is useful for applications that cannot use the native Kafka protocol or for environments where HTTP is preferred.
+
+    Steps:
+      - Create consumer instance 
+        #> curl --location 'http://localhost:8082/consumers/my_consumer' \ --header 'Content-Type: application/vnd.kafka.json.v2+json' \ --data '{     "name": "my_consumer_instance", "format": "json", "auto.offset.reset": "earliest" }'       
+      - Subscribe to topic(s)
+        #> curl --location 'http://localhost:8082/consumers/my_consumer/instances/my_consumer_instance/subscription' \ --header 'Content-Type: application/vnd.kafka.json.v2+json' \ --data '{ "topics": ["my_topic"] }'
+      - Consume messages
+        #> curl --location 'http://localhost:8082/consumers/my_consumer/instances/my_consumer_instance/records' \ --header 'Accept: application/vnd.kafka.json.v2+json' \ --data '{ "max_bytes": 1048576 }'
+
+Sample Questions:
+
+What is true about partitions? (select two):
+  - 1. A partition has a one replica that is leader, while the others replicas are follower.
+  - 2. A broker can have the differnt partition for the  same topic on it's disk
+  - 3. A broker can have the  partition and the replica of topic on it's disk
+  - 4. You can not have more partition than the no of broker in your cluster.
+
+Kafka Partition Strategy: 
+  - The default key partitioning strategy in Kafka (DefaultPartitioner class) is to use a hash function on the key of the message.
+  - The hash value is then modulo divided by the number of partitions to determine the partition to which the message will be sent.
+  - This ensures that messages with the same key will always go to the same partition, 
+    which is important for maintaining message order for that key.
+
+A critical formula for the exam is the relationship between acks=all and min.insync.replicas.
+
+Scenario: A topic has replication.factor=3 and min.insync.replicas=2. One broker crashes. Can the producer write?
+
+Analysis: Yes. 3 brokers - 1 crash = 2 available. Since 2 >= min.insync.replicas (2), the write succeeds.
+
+Scenario: A second broker crashes.
+
+Analysis: Now only 1 replica is available. Since 1 < min.insync.replicas (2), the producer with acks=all receives a NotEnoughReplicasException.
+
+Insight: The availability of the system for writes has been sacrificed to guarantee consistency.
+

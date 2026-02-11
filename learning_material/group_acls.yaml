@@ -1,0 +1,57 @@
+# ==============================================================================
+# KAFKA LEARNING: CONSUMER GROUP ACL STRATEGIES
+# ==============================================================================
+# Scenario: User 'alice' needs to consume from topic 'orders'.
+# Problem: Without a specific ACL, she cannot commit offsets or join a group.
+
+strategies:
+  # ----------------------------------------------------------------------------
+  # OPTION 1: THE "LEAST PRIVILEGE" PATTERN (STRICT)
+  # ----------------------------------------------------------------------------
+  strict_matching:
+    description: "Grant access to one specific group name only."
+    use_case: "Production microservices where identities are fixed and known."
+    pros: "Highest security. Alice cannot interfere with any other group."
+    cons: "Alice cannot use the console consumer without the --group flag."
+    acl_command: >
+      kafka-acls.sh --add --allow-principal User:alice --operation Read --group alice-group-v1
+    client_requirement: "Must use: --group alice-group-v1"
+
+  # ----------------------------------------------------------------------------
+  # OPTION 2: THE "NAMESPACE / PREFIX" PATTERN (RECOMMENDED)
+  # ----------------------------------------------------------------------------
+  prefixed_matching:
+    description: "Grant access to any group starting with a specific string."
+    use_case: "Dev teams who need to spin up multiple consumer instances locally."
+    pros: "Flexible but bounded. Alice can use random IDs if they start with 'alice-'."
+    cons: "Slightly broader surface area than strict matching."
+    acl_command: >
+      kafka-acls.sh \
+        --add --allow-principal User:alice \
+        --operation Read \
+        --resource-pattern-type prefixed \
+        --group alice-
+    client_requirement: "Can use: --group alice-debug, --group alice-test, etc."
+
+  # ----------------------------------------------------------------------------
+  # OPTION 3: THE "WILDCARD" PATTERN (OPEN)
+  # ----------------------------------------------------------------------------
+  wildcard_matching:
+    description: "Grant access to every single group in the cluster."
+    use_case: "Sandbox environments or admin-lite users."
+    pros: "Zero configuration friction. Alice will never see a Group Auth error."
+    cons: "Dangerous. Alice can accidentally overwrite offsets for 'billing-group'."
+    acl_command: >
+      kafka-acls.sh --add --allow-principal User:alice --operation Read --group '*'
+    client_requirement: "Can use any group ID or leave the flag empty (random ID)."
+
+# ------------------------------------------------------------------------------
+# THE "WHY" (EXCEPTIONS CHEAT SHEET)
+# ------------------------------------------------------------------------------
+troubleshooting:
+  error_message: "org.apache.kafka.common.errors.GroupAuthorizationException"
+  root_cause: |
+    Kafka identifies the consumer by the 'Group ID'. If that ID is not 
+    specifically allowed by an ACL, the broker blocks the connection. 
+    The Console Consumer generates a random ID (console-consumer-XXXXX) 
+    by default if the --group flag is missing.

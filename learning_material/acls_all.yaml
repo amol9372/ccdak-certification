@@ -1,0 +1,55 @@
+# ==============================================================================
+# KAFKA ACL RESOURCE DICTIONARY
+# ==============================================================================
+
+resources:
+  # ----------------------------------------------------------------------------
+  # 1. TOPIC (The Data)
+  # ----------------------------------------------------------------------------
+  - type: "TOPIC"
+    scope: "Specific (e.g., 'orders') or Wildcard ('*')"
+    operations:
+      READ: "Consume messages."
+      WRITE: "Produce messages."
+      DESCRIBE: "View partition count, leaders, and ISRs."
+      DELETE: "Delete the topic entirely."
+      ALTER: "Change configuration (retention, segment size)."
+      ALTER_CONFIGS: "Deprecated alias for ALTER."
+
+  # ----------------------------------------------------------------------------
+  # 2. GROUP (The Progress Tracker)
+  # ----------------------------------------------------------------------------
+  - type: "GROUP"
+    scope: "Specific ID (e.g., 'billing-group') or Prefix ('billing-')"
+    operations:
+      READ: "Join the group and commit offsets."
+      DESCRIBE: "View offset lag and member list."
+      DELETE: "Delete the group offsets (reset)."
+
+  # ----------------------------------------------------------------------------
+  # 3. CLUSTER (The Infrastructure)
+  # ----------------------------------------------------------------------------
+  - type: "CLUSTER"
+    scope: "Literal name 'kafka-cluster'"
+    operations:
+      CREATE: "Create new topics."
+      DESCRIBE: "Discover brokers (Metadata)."
+      ALTER: "Change broker-level configs."
+      IDEMPOTENT_WRITE: "Get a Producer ID (PID)."
+
+  # ----------------------------------------------------------------------------
+  # 4. TRANSACTIONAL_ID (The Atomic Identity)
+  # ----------------------------------------------------------------------------
+  - type: "TRANSACTIONAL_ID"
+    scope: "Specific ID (e.g., 'tx-001')"
+    operations:
+      WRITE: "Init and Commit transactions."
+      DESCRIBE: "Check transaction state."
+
+  # ----------------------------------------------------------------------------
+  # 5. DELEGATION_TOKEN (Advanced Security)
+  # ----------------------------------------------------------------------------
+  - type: "DELEGATION_TOKEN"
+    scope: "N/A"
+    operations:
+      DESCRIBE: "View token details."

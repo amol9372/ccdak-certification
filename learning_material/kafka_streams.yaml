@@ -1,0 +1,146 @@
+kafka_streams_master_guide:
+  definition:
+    what_is_it: "A Java client library for building stateful microservices."
+    what_is_it_NOT: "It is NOT a cluster. It runs inside your app (Spring Boot, etc.)."
+    scaling_model: "Scale out by adding more instances of your application with the same 'application.id'."
+
+  core_architecture:
+    application_id: "The Consumer Group ID for your streams app. Crucial for scaling."
+    topology: "The logic graph (DAG). Nodes = Processors, Edges = Streams."
+    task: "The smallest unit of parallelism. 1 Task = 1 Input Partition."
+    thread: "StreamThread. Can execute one or more Tasks."
+    state_store:
+      default: "RocksDB (embedded key-value store on local disk)."
+      purpose: "Stores data for Joins, Aggregations, and Windows."
+      fault_tolerance: "Backed up by a hidden 'changelog' topic in Kafka."
+
+  primary_abstractions:
+    KStream:
+      type: "Event Stream (INSERT)"
+      semantics: "Infinite log of events. History matters."
+      key_behavior: "Keys can be duplicated. Record (Alice, 1) and (Alice, 2) are two separate events."
+      null_value: "Just a record with null (or filtered out)."
+
+    KTable:
+      type: "Changelog Stream (UPSERT)"
+      semantics: "Current State (Snapshot). Only the latest value matters."
+      key_behavior: "Keys are unique (PK). Record (Alice, 2) overwrites (Alice, 1)."
+      null_value: "DELETE (Tombstone). Removes 'Alice' from the table."
+
+    GlobalKTable:
+      type: "Broadcast Variable"
+      semantics: "Full copy of the topic on EVERY application instance."
+      use_case: "Star Schema joins (e.g., Joining 'Orders' stream with 'ProductCatalog' table)."
+      benefit: "No co-partitioning required. Very fast lookups."
+      cost: "High network/storage usage (copies entire topic)."
+
+  duality_conversions:
+    stream_to_table:
+      method: ".toTable()"
+      implication: "Starts buffering/caching. Turns events into current state."
+      groupByKey: "Often required before aggregation to ensure correct key grouping."
+    table_to_stream:
+      method: ".toStream()"
+      implication: "Turns state updates into a stream of change events."
+
+  operations:
+    stateless:
+      description: "No RocksDB needed. Process record-by-record."
+      examples:
+        - filter() / filterNot()
+        - map() / mapValues() # map() triggers repartition (key change), mapValues() does not.
+        - flatMap() / flatMapValues()
+        - branch() # Split one stream into multiple
+        - merge()
+
+    stateful:
+      description: "Needs RocksDB. Remembers past data."
+      examples:
+        - count()
+        - reduce() # Combine values (Must be same type)
+        - aggregate() # Combine values (Can change type, e.g., String -> Long)
+        - join()
+
+  joins:
+    pre_requisite: "Co-partitioning (Input topics must have SAME partition count & partitioning strategy)."
+    types:
+      KStream-KStream:
+        behavior: "Windowed Join. (Must happen within X minutes)."
+        output: "KStream (New combined event)."
+      KStream-KTable:
+        behavior: "Lookup Join. (Enrich stream event with current table state)."
+        output: "KStream (Enriched event)."
+        trigger: "Driven by the STREAM side only."
+      KStream-GlobalKTable:
+        behavior: "Lookup Join (No co-partitioning needed)."
+        output: "KStream."
+      KTable-KTable:
+        behavior: "FK Join / PK Join."
+        output: "KTable (New derived state)."
+
+  time_concepts:
+    event_time: "When the event happened (embedded in record)."
+    processing_time: "When your app read the record (wall-clock)."
+    ingestion_time: "When the broker received the record."
+    default: "Event Time (Best for correctness)."
+
+  windowing:
+    tumbling: "Fixed size, No overlap, No gaps. (e.g., Every 5 min: 00:00-00:05, 00:05-00:10)."
+    hopping: "Fixed size, Overlap. (e.g., 5 min window, hop every 1 min)."
+    sliding: "Fixed size, linked to record timestamp. (For 'A happens within 5m of B' joins)."
+    session: "Dynamic size. Defined by inactivity gap. (User active... gap... new session)."
+
+  exam_traps:
+    repartitioning: "Happens automatically if you change the Key (map, selectKey) before an aggregation/join."
+    internal_topics: "Streams creates many hidden topics (repartition-*, changelog-*) to manage state."
+    standby_replicas: "Copies of state stores on other instances for faster failover (configured via `num.standby.replicas`)."
+
+###################################################################
+###################################################################
+###################################################################
+
+ADVANCED:
+  configuration:
+    processing_guarantee:
+      property: "processing.guarantee"
+      values:
+        at_least_once: "Default. Fast. May generate duplicates in sink topic on crash."
+        exactly_once_v2: "The 'Macro'. Automatically configures internal clients for transactions."
+
+      # The "Black Box" Logic
+      what_it_does_internally:
+        consumer: "Sets isolation.level = read_committed (Hides aborted transactions)."
+        producer: "Sets enable.idempotence = true, acks = all, retries = MAX."
+        transaction: "Wraps the Commit Offset + State Store Update + Sink Write in one atomic transaction."
+
+  # The "Microservice Trap" (Most important for Interview/Exam)
+  architecture_scenarios:
+    scenario_1_upstream_control:
+      question: "Does setting 'exactly_once' in my Stream App fix duplicates from the Source Producer?"
+      answer: "NO."
+      reason: "Your Stream App cannot configure the remote application (Service A) that sends data to the source topic."
+      result: "Garbage In (Duplicates) -> Garbage Out (Processed Duplicates)."
+
+    scenario_2_sink_protection:
+      question: "So what DOES 'exactly_once' fix?"
+      answer: "It prevents YOUR Stream App (Service B) from generating NEW duplicates when IT crashes."
+      mechanism: "If Service B calculates 'Total=$500' and writes it, but crashes before committing, the transaction aborts. The Sink Topic never 'sees' the $500. On restart, it retries safely."
+
+  idempotence_breakdown:
+    source_idempotence:
+      role: "Protect against external producers sending dupes."
+      control: "Outside your control. Must be fixed by the team owning the Upstream Producer."
+    sink_idempotence:
+      role: "Protect against internal retry loops."
+      control: "Controlled by YOU via processing.guarantee."
+      criticality: "Essential. Without this, a stream processor is a 'Duplicate Generator' during instability."
+
+  comparison_vs_standard_consumer:
+    standard_consumer:
+      has_processing_guarantee_config: false
+      eos_implementation: "Manual. Hard. Requires producer.sendOffsetsToTransaction()."
+      scope: "Consumer and Producer are strangers (separate beans)."
+    kafka_streams:
+      has_processing_guarantee_config: true
+      eos_implementation: "Automatic. Just flip the switch."
+      scope: "Consumer and Producer are married inside the StreamTask."

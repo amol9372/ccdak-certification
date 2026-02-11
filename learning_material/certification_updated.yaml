@@ -1,0 +1,168 @@
+kafka:
+   
+  LINKS:
+    ACLs-Link: https://docs.google.com/document/d/1V1MUyL7GnjY0VKDgyDihMGIdxtAHqdcip-dWw_Na3eg/edit?tab=t.0 
+    properties-link: https://docs.google.com/spreadsheets/d/1UkJt-Y0p0bpse6pUCwaLdVvGzni8hYWaFl6LJYlvqAw/edit?gid=1821800459#gid=1821800459
+
+
+  ARCHITECTURE_EVOLUTION:
+    Zookeeper_Mode:
+      Role: External metadata store (topics, ACLs, broker status).
+      Controller: One broker is elected Controller. It reads from ZK and "pushes" metadata updates to other brokers.
+      Limitation: "Split Brain" scenarios, slow recovery, bottleneck on ZK writes.
+    
+    KRaft_Mode (Kafka Raft Metadata):
+      Role: Removes Zookeeper dependency. Metadata is stored inside Kafka itself and managed using an internal 
+            Raft-based consensus mechanism, providing distributed and consistent metadata management within the Kafka cluster.
+      Metadata_Topic: All cluster metadata is stored in an internal topic `__cluster_metadata`.
+      Controller_Quorum: 
+        - A subset of brokers act as "Controllers".
+        - They use the Raft Consensus Algorithm to elect a leader and commit metadata.
+      Metadata_Propagation:
+        - Brokers "pull" metadata updates by consuming the `__cluster_metadata` log (Event sourcing).
+        - Faster recovery because metadata is loaded from local log, not fetched from remote ZK.
+
+  REPLICATION_MODELS:
+    Data_Replication (User Topics):
+      Model: Leader + ISR (In-Sync Replicas).
+      Commit: Message is committed when all ISRs have acknowledged (if acks=all).
+      Flexibility: Can trade availability for consistency (min.insync.replicas).
+    
+    Metadata_Replication (KRaft):
+      Model: Raft Consensus (Quorum).
+      Commit: Metadata change is committed when a Majority (Quorum) accepts it.
+      Strictness: Stricter than ISR; requires majority to function.
+
+  SCHEMA_REGISTRY:
+    Subject: Namespace or name of the schema
+    auto.register.schemas: > 
+      Important: Should be false in production. If true, producers automatically register new schemas, 
+      potentially polluting the registry with bad data.
+      
+    3_Ways_to_evolve_schemas: 
+      - Schema registry API (HTTP POST)
+      - Confluent CLI
+      - Maven/Gradle plugins
+
+    3_Types_of_Schemas:
+      - Avro: Default. Compact. Strong typing. Requires default values for backward compatibility.
+      - Protobuf: Google's format. No "default values" needed in the same way (zero-value defaults).
+      - Json: Verbose. No binary compression.
+
+  CONSUMER:
+    Subscription_Modes:
+      Dynamic_Subscription (The Standard):
+        - method: `consumer.subscribe(Collections.singleton("topic-a"))`
+        - behavior: Enables Consumer Group Management. Kafka automatically balances partitions among consumers in the group.
+        - rebalance: YES. If a consumer dies, partitions move to another consumer.
+      
+      Manual_Assignment (The Exception):
+        - method: `consumer.assign(Collections.singleton(new TopicPartition("topic-a", 0)))`
+        - behavior: Consumer reads ONLY from the specified partition. 
+        - rebalance: NO. If this consumer dies, the partition is NOT reassigned. Use cases: Custom stores, restoring state.
+    
+    Static_Membership:
+      - property: `group.instance.id`
+      - benefit: Reduces "Rebalance Storms". If a consumer restarts within `session.timeout.ms`, 
+                 the group does not rebalance. The partition assignment "sticks" to the ID.
+    
+    properties:
+      enable.auto.commit:
+        - default: true
+        - interval: controlled by `auto.commit.interval.ms` (default 5000ms/5s).
+        - behavior_true: Kafka automatically commits offsets periodically while `poll()` is running.
+        - behavior_false: You must call `commitSync()` or `commitAsync()` explicitly in your code.
+        
+      auto.offset.reset:
+        - default: latest
+        - earliest: Start from the beginning of the topic if no valid offset exists.
+        - latest: Start from the end (wait for new messages) if no valid offset exists.
+        - none: Throw exception if no offset exists.
+        - note: has NO EFFECT if a valid offset already exists.
+
+    PROCESSING_SEMANTICS:
+      At_Most_Once:
+        Config: `enable.auto.commit=true`
+        Scenario: 
+          1. Consumer fetches messages.
+          2. Kafka auto-commits the offset.
+          3. Consumer crashes BEFORE processing is finished.
+        Result: Data Loss. (When the consumer restarts, it resumes from the committed offset, skipping the unprocessed messages).
+      
+      At_Least_Once:
+        Config: `enable.auto.commit=false`
+        Scenario:
+          1. Consumer fetches messages.
+          2. Consumer processes messages successfully.
+          3. Consumer crashes BEFORE calling `commitSync()`.
+        Result: Duplicates. (When the consumer restarts, it fetches the old uncommitted offset and re-processes the same messages).
+        *Requirement: Your downstream system (DB/API) must be Idempotent to handle duplicates safely.
+
+      Exactly_Once (EOS):
+        Config: 
+          - Producer: `enable.idempotence=true` (Producer ID logic)
+          - Consumer: `isolation.level=read_committed`
+        Mechanism: Uses Kafka Transactions to ensure messages are written and consumed atomically.
+        Result: No loss, no duplicates.    
+
+  COMMANDS: 
+    Create_Topic:
+      # Note: --zookeeper is deprecated. Use --bootstrap-server
+      cmd: kafka-topics --create --topic orders --partitions 3 --replication-factor 3 --bootstrap-server <host>:9092
+    
+    Consumer_Group_Reset:
+      # Critical for exam: How to replay data
+      cmd: kafka-consumer-groups --bootstrap-server <host>:9092 --group <group_id> --reset-offsets --to-earliest --execute --topic <topic_name>
+
+  K_STREAMS:
+    Types:
+      - KStream: Insert-only (Event stream). Unbounded.
+      - KTable: Upsert (Update stream). Represents current state (like a DB table). keys with null values are deletes (tombstones).
+      - GlobalKTable: Replicated to ALL instances. Used for star-schema joins (e.g., enriching user data). No co-partitioning required.
+    
+    Windows:
+      - Tumbling: Fixed size, No overlap (Every 5 mins).
+      - Hopping: Fixed size, Overlap (Every 5 mins, advance by 1 min).
+      - Sliding: Data-driven (Only created when records arrive). Used in Joins.
+      - Session: Activity-driven (Timeout based).
+
+  TOPIC_CONFIG:
+    retention.ms: 
+      - default: 7 days.
+      - set to -1 for infinite retention (Compact topics).
+    cleanup.policy:
+      - delete: Discard old segments based on time/size.(log.retention.ms, log.retention.bytes).
+      - compact: Keep the latest value for every key. (Mandatory for KTables/connect-offsets).
+      - delete+compact: Both policies applied. First compacted, then deleted based on time/size.
+    min.insync.replicas:
+      - Only matters when acks=all.
+      - If Available Replicas < Min ISR, Producer gets `NotEnoughReplicasException`.
+      - Read availability is NOT affected, only Write availability.
+
+  BROKER:
+    Config_Types:
+      - Read-only: Requires restart (e.g., `log.dirs`, `num.partitions` default).
+      - Dynamic: Can be updated via AdminClient without restart (e.g., `min.insync.replicas` for a specific topic).
+    
+    Metadata_Cache:
+      - ZK Mode: Broker metadata cache can lag behind ZK.
+      - KRaft Mode: Metadata is an event log. Brokers replay the log to update their state, ensuring stronger consistency.
+
+  STREAMS_JOINS:
+    Co-Partitioning:
+      - Requirement: Input topics must have SAME number of partitions.
+      - Requirement: Producers must use SAME partitioning strategy (hashing logic).
+      - Exception: GlobalKTable joins do NOT require co-partitioning.
+
+  SAMPLE_SCENARIOS:
+    Scenario_1:
+      Q: You have 6 partitions and 8 consumers in one group.
+      A: 2 Consumers will be idle.
+    
+    Scenario_2:
+      Q: You want to replay messages for a consumer group from the beginning.
+      A: Consumers must be STOPPED. Use `kafka-consumer-groups --reset-offsets --to-earliest`.
+    
+    Scenario_3:
+      Q: Producer getting `NotEnoughReplicasException`.
+      A: Check `min.insync.replicas`. It is likely that (Current ISR count < Configured Min ISR). The Brokers are likely up, but not fully synced.

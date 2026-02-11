@@ -1,0 +1,115 @@
+kafka_security_module:
+  meta:
+    title: "Kafka Security Protocols & SASL Mechanisms"
+    target_audience: "DevOps & Backend Developers"
+    version: "2025.1"
+
+  # ============================================================================
+  # 1. THE HIERARCHY (The "Layer Cake")
+  # ============================================================================
+  concepts:
+    security_protocol:
+      description: "The outer envelope. Defines Encryption (SSL) and the Transport Layer."
+      options:
+        PLAINTEXT: "No Encryption, No Auth. (Dev only)"
+        SSL: "Encryption Only. (Certificates required)"
+        SASL_PLAINTEXT: "No Encryption + Authentication. (Fast internal networks)"
+        SASL_SSL: "Encryption + Authentication. (Production standard)"
+
+    sasl_mechanism:
+      description: "The handshake inside the envelope. Defines HOW we check passwords."
+      options:
+        PLAIN: "Simple Username/Password. Sent as text. Fast but requires SSL for safety."
+        SCRAM-SHA-256: "Salted Challenge Response. Password never travels over wire. Secure."
+        GSSAPI: "Kerberos. Enterprise Single Sign-On (Active Directory)."
+        OAUTHBEARER: "Token-based (JWT). Integrates with Okta/Keycloak."
+
+  # ============================================================================
+  # 2. CONFIGURATION CHEAT SHEET
+  # ============================================================================
+  configuration_rules:
+    rule_1: "Client and Server MUST match `security.protocol`."
+    rule_2: "Client and Server MUST match `sasl.mechanism`."
+    rule_3: "If using SASL_PLAINTEXT, credentials are readable on the wire (unless SCRAM is used, which hides the password but not the username)."
+
+  # ============================================================================
+  # 3. JAAS CONFIGURATION EXAMPLES (Copy-Paste Ready)
+  # ============================================================================
+  jaas_examples:
+    # -------------------------------------------------------
+    # SCENARIO A: PLAIN (Static File Auth)
+    # Use Case: Internal Broker-to-Broker communication
+    # -------------------------------------------------------
+    plain_mechanism:
+      client_config: |
+        security.protocol=SASL_PLAINTEXT
+        sasl.mechanism=PLAIN
+        sasl.jaas.config=org.apache.kafka.common.security.plain.PlainLoginModule required \
+            username="admin" \
+            password="admin-secret";
+
+      server_jaas_conf: |
+        KafkaServer {
+            org.apache.kafka.common.security.plain.PlainLoginModule required
+            username="admin"
+            password="admin-secret"
+            user_admin="admin-secret"   // <--- Defines allowed users
+            user_alice="alice-secret";  // <--- Hardcoded users
+        };
+
+    # -------------------------------------------------------
+    # SCENARIO B: SCRAM (Dynamic Metadata Auth)
+    # Use Case: External Clients, Microservices (Secure)
+    # -------------------------------------------------------
+    scram_mechanism:
+      client_config: |
+        security.protocol=SASL_PLAINTEXT
+        sasl.mechanism=SCRAM-SHA-256
+        sasl.jaas.config=org.apache.kafka.common.security.scram.ScramLoginModule required \
+            username="alice" \
+            password="alice-secret";
+
+      server_jaas_conf: |
+        KafkaServer {
+            org.apache.kafka.common.security.scram.ScramLoginModule required
+            username="admin"
+            password="admin-secret";
+            // Note: NO user list here! Users are stored in ZK/Metadata.
+        };
+
+    # -------------------------------------------------------
+    # SCENARIO C: HYBRID (The "Pro" Setup)
+    # Use Case: PLAIN for Brokers (Stability), SCRAM for Apps (Flexibility)
+    # -------------------------------------------------------
+    hybrid_setup:
+      broker_yaml_env:
+        KAFKA_SASL_ENABLED_MECHANISMS: "PLAIN,SCRAM-SHA-256"
+        KAFKA_SASL_MECHANISM_INTER_BROKER_PROTOCOL: "PLAIN"
+
+      server_jaas_conf: |
+        // MUST use PLAIN module to satisfy Inter-Broker auth
+        KafkaServer {
+            org.apache.kafka.common.security.plain.PlainLoginModule required
+            username="admin"
+            password="admin-secret"
+            user_admin="admin-secret";
+        };
+
+      client_usage:
+        admin_cli: "Use sasl.mechanism=PLAIN (to talk to jaas.conf users)"
+        app_client: "Use sasl.mechanism=SCRAM-SHA-256 (to talk to metadata users)"
+
+  # ============================================================================
+  # 4. COMMON ERRORS
+  # ============================================================================
+  troubleshooting:
+    error_authentication_failed:
+      message: "Authentication failed: Invalid username or password"
+      cause_1: "Wrong Password."
+      cause_2: "Mechanism Mismatch (Client sent PLAIN, Server expected SCRAM)."
+      cause_3: "User Location (Client sent PLAIN, but user 'alice' is only in SCRAM metadata)."
+
+    error_handshake_failed:
+      message: "Unexpected Kafka request of type METADATA during SASL handshake"
+      cause: "Protocol Mismatch. Server is SASL_PLAINTEXT, Client is PLAINTEXT (default)."
+      fix: "Add security.protocol=SASL_PLAINTEXT to client properties."

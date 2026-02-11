@@ -1,0 +1,27 @@
+{
+  "type": "record",
+  "name": "Purchase",
+  "namespace": "io.confluent.developer.avro",
+  "fields": [
+    {
+      "name": "item",
+      "type": "string"
+    },
+    {
+      "name": "total_cost",
+      "type": "double"
+    },
+    {
+      "name": "customer_id",
+      "type": "string"
+    },
+    {
+      "name": "coupon_codes",
+      "type": {
+        "type": "array",
+        "values": "string",
+        "items": "string"
+      }
+    }
+  ]
+}

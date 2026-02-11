@@ -1,0 +1,62 @@
+SCHEMA_REGISTRY:
+  core_concept:
+    definition: "The API Contract for your data pipeline."
+    problem_solved: "Prevents producers from sending bad data that crashes consumers (e.g., field renaming)."
+    location: "Separate Java process (REST Server). Not in the data path."
+
+  architecture:
+    wire_format:
+      magic_byte: "Byte 0 (Always 0)"
+      schema_id: "Bytes 1-4 (32-bit Integer)" # NOT Schema version
+      payload: "Bytes 5+ (Avro/Protobuf data)"
+      total_overhead: "5 bytes"
+    sequence:
+      producer: "Checks cache -> if miss, POSTs schema to SR -> gets ID -> prepends ID to data."
+      consumer: "Reads ID (bytes 1-4) -> GETs schema from SR (or cache) -> deserializes."
+
+  subject_naming_strategies:
+    TopicNameStrategy:
+      default: true
+      format: "<topic>-value"
+      use_case: "One schema type per topic (Standard)."
+    RecordNameStrategy:
+      default: false
+      format: "<namespace>.<RecordName>"
+      use_case: "Multiple event types in ONE topic (e.g., UserLogin, UserLogout)."
+    TopicRecordNameStrategy:
+      default: false
+      format: "<topic>-<namespace>.<RecordName>"
+      use_case: "Multiple types per topic, scoped strictly to that topic."
+
+  compatibility_modes:
+    BACKWARD:
+      status: "DEFAULT"
+      definition: "New Consumer can read Old Data."
+      allowed_changes: "Delete required field; Add optional field."
+      upgrade_order: "CONSUMERS FIRST."
+    FORWARD:
+      status: "Rare"
+      definition: "Old Consumer can read New Data."
+      allowed_changes: "Add required field; Delete optional field."
+      upgrade_order: "PRODUCERS FIRST."
+    FULL:
+      status: "Safest/Hardest"
+      definition: "Backward + Forward compatible."
+      allowed_changes: "Only add/remove optional fields."
+      upgrade_order: "Any order."
+    TRANSITIVE:
+      definition: "Checks compatibility against ALL previous versions (not just the last one)."
+
+  java_client_config:
+    schema_registry_url: "Must be set in Properties."
+    serializer: "io.confluent.kafka.serializers.KafkaAvroSerializer"
+    deserializer: "io.confluent.kafka.serializers.KafkaAvroDeserializer"
+    specific_avro_reader:
+      key: "specific.avro.reader"
+      value: "true"
+      implication: "Returns strongly typed POJOs (SpecificRecord). If false, returns GenericRecord (Map-like)."
+
+  exam_traps:
+    - "Schema Registry is NOT in the data path for every message (caching used)."
+    - "Deleting a required field is BACKWARD compatible."
+    - "Adding a required field is FORWARD compatible (breaks old consumers)."
