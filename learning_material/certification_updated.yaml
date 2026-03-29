@@ -50,6 +50,28 @@ kafka:
       - Json: Verbose. No binary compression.
 
   CONSUMER:
+   
+    consumer_group:
+      range partition_assignment: [Default] - Pre-requisite = co-partitioning.
+        Each partition is assigned to only one consumer, so if there are more consumers than partitions, some will be idle. 
+        Suitable for most use cases; strict ordering is only required in specific scenarios (e.g., processing user events in order).
+      cooperative partition_assignment: Allows multiple consumers to share partitions during rebalances, reducing downtime.
+      properties:
+        group.id: "Unique identifier for the consumer group. Consumers with the same group.id belong to the same group."
+        session.timeout.ms: "Time (ms) to wait for a heartbeat before considering a consumer dead (default 10000ms)."
+        heartbeat.interval.ms: "Frequency (ms) of sending heartbeats to the broker (default 3000ms)."
+        max.poll.interval.ms: "Max time (ms) between calls to poll() before the consumer is considered failed (default 300000ms/5min)."
+        rebalance_protocol: "Range (default) or Cooperative (incremental). Range causes all consumers to rebalance at once. Cooperative allows for smoother transitions with less downtime."
+      group_coordinator:
+        - Role: A broker that manages consumer group membership and partition assignment.
+        - Election: The coordinator is elected among the brokers. If it fails, a new one is elected.
+        - Communication: Consumers send heartbeats to the coordinator to maintain their membership in the group.  
+      group leader: One consumer in the group is elected as the leader. It is responsible for partition assignment during rebalances. The leader is elected among the consumers in the group. If it fails, a new leader is elected. Communication: The leader communicates with the coordinator to receive partition assignment information and distributes it to other consumers in the group.  
+      consumer_offsets:
+        - Storage: Stored in an internal topic `__consumer_offsets` with compacted cleanup policy.
+        - Commit: Consumers commit their offsets to this topic to track their progress.
+        - Visibility: Offsets are visible to all consumers in the group, allowing for features like lag monitoring and manual offset management.  
+
     Subscription_Modes:
       Dynamic_Subscription (The Standard):
         - method: `consumer.subscribe(Collections.singleton("topic-a"))`
@@ -79,6 +101,16 @@ kafka:
         - latest: Start from the end (wait for new messages) if no valid offset exists.
         - none: Throw exception if no offset exists.
         - note: has NO EFFECT if a valid offset already exists.
+
+    ### Important ####
+    Sticky vs Cooperative Rebalance:
+      Sticky_Assignment:
+        - Behavior: All partitions are revoked and reassigned during a rebalance, causing downtime.
+        - Use_Case: Simple applications where downtime is acceptable.
+      cooperative_Assignment:
+        - Behavior: Partitions are reassigned incrementally, allowing for smoother transitions with less downtime.
+        - Use_Case: Critical applications where minimizing downtime is essential. Resolves the stop processing issue during rebalances.  
+    ###################
 
     PROCESSING_SEMANTICS:
       At_Most_Once:
